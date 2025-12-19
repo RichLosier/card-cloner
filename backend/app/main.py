@@ -137,6 +137,75 @@ async def upload_logo(file: UploadFile = File(...)):
     }
 
 
+@app.post("/upload-cards")
+async def upload_cards(
+    front_card: UploadFile = File(...),
+    first_name: str = Form(...),
+    last_name: str = Form(...),
+    email: str = Form(""),
+    back_card: Optional[UploadFile] = File(None),
+):
+    """
+    Upload card files (front + optional back) and save to Supabase Storage.
+    Files are organized by: Nom_Prénom/timestamp/
+    
+    Args:
+        front_card: Front side of the business card (required)
+        first_name: User's first name (required)
+        last_name: User's last name (required)
+        email: User's email (optional)
+        back_card: Back side of the business card (optional)
+    
+    Returns:
+        Upload result with Supabase URLs
+    """
+    # Validate front card
+    if not front_card.content_type.startswith("image/") and front_card.content_type != "application/pdf":
+        raise HTTPException(status_code=400, detail="Front card must be an image or PDF")
+    
+    # Generate unique IDs
+    front_id = str(uuid.uuid4())
+    
+    # Save front card locally first
+    front_ext = front_card.filename.split(".")[-1] if front_card.filename else "jpg"
+    front_path = f"uploads/{front_id}.{front_ext}"
+    
+    front_content = await front_card.read()
+    with open(front_path, "wb") as f:
+        f.write(front_content)
+    
+    # Save back card if provided
+    back_path = None
+    if back_card and back_card.filename:
+        back_id = str(uuid.uuid4())
+        back_ext = back_card.filename.split(".")[-1] if back_card.filename else "jpg"
+        back_path = f"uploads/{back_id}.{back_ext}"
+        
+        back_content = await back_card.read()
+        with open(back_path, "wb") as f:
+            f.write(back_content)
+    
+    # Upload to Supabase Storage
+    result = await storage_service.upload_card_files(
+        first_name=first_name,
+        last_name=last_name,
+        email=email,
+        front_card_path=front_path,
+        back_card_path=back_path
+    )
+    
+    if result.get("status") == "error":
+        raise HTTPException(status_code=500, detail=result.get("error", "Upload failed"))
+    
+    return {
+        "status": "success",
+        "message": f"Files uploaded for {first_name} {last_name}",
+        "folder": result.get("folder"),
+        "files": result.get("files"),
+        "front_id": front_id  # For subsequent processing
+    }
+
+
 @app.get("/detect-corners/{image_id}")
 async def detect_corners(image_id: str):
     """Automatically detect card corners in an uploaded image."""

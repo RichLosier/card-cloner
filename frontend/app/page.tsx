@@ -2,12 +2,10 @@
 
 import { useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Upload, Wand2, Code, CheckCircle, Image as ImageIcon, Camera } from "lucide-react";
-import SmartUploader from "@/components/SmartUploader";
-import LogoUploader from "@/components/LogoUploader";
+import CardUploadPage from "@/components/CardUploadPage";
 import PerspectiveEditor from "@/components/PerspectiveEditor";
+import LogoUploader from "@/components/LogoUploader";
 import GenerationDashboard from "@/components/GenerationDashboard";
-import Header from "@/components/Header";
 
 type Step = "upload" | "logo" | "crop" | "generate" | "complete";
 
@@ -32,53 +30,109 @@ interface PerspectivePoints {
   bottomLeft: { x: number; y: number };
 }
 
+interface UserInfo {
+  firstName: string;
+  lastName: string;
+  email: string;
+}
+
 export default function Home() {
   const [currentStep, setCurrentStep] = useState<Step>("upload");
   const [uploadedImage, setUploadedImage] = useState<UploadedImage | null>(null);
-  const [backImage, setBackImage] = useState<UploadedImage | null>(null); // For verso
+  const [backImage, setBackImage] = useState<UploadedImage | null>(null);
   const [uploadedLogo, setUploadedLogo] = useState<UploadedLogo | null>(null);
   const [perspectivePoints, setPerspectivePoints] = useState<PerspectivePoints | null>(null);
   const [autoDetectedPoints, setAutoDetectedPoints] = useState<PerspectivePoints | null>(null);
   const [autoDetected, setAutoDetected] = useState(false);
   const [jobId, setJobId] = useState<string | null>(null);
+  const [userInfo, setUserInfo] = useState<UserInfo | null>(null);
 
-  const steps = [
-    { id: "upload", label: "Photo/Upload", icon: Camera },
-    { id: "logo", label: "Logo", icon: ImageIcon },
-    { id: "crop", label: "Recadrage", icon: Wand2 },
-    { id: "generate", label: "Génération", icon: Code },
-    { id: "complete", label: "Terminé", icon: CheckCircle },
-  ];
+  const handleUploadComplete = async (
+    frontImage: File,
+    backImageFile: File | null,
+    info: UserInfo
+  ) => {
+    setUserInfo(info);
 
-  const currentStepIndex = steps.findIndex((s) => s.id === currentStep);
+    // Upload front image
+    const formData = new FormData();
+    formData.append("file", frontImage);
 
-  const handleImageUploaded = async (frontImage: UploadedImage, backImageData?: UploadedImage) => {
-    setUploadedImage(frontImage);
-    
-    // Store back image if provided
-    if (backImageData) {
-      setBackImage(backImageData);
-    }
-    
-    // Auto-detect corners for front image
     try {
-      const response = await fetch(`/api/detect-corners/${frontImage.id}`);
+      const response = await fetch("/api/upload", {
+        method: "POST",
+        body: formData,
+      });
+
       if (response.ok) {
         const data = await response.json();
-        const corners = data.corners;
-        setAutoDetectedPoints({
-          topLeft: { x: corners.top_left[0], y: corners.top_left[1] },
-          topRight: { x: corners.top_right[0], y: corners.top_right[1] },
-          bottomRight: { x: corners.bottom_right[0], y: corners.bottom_right[1] },
-          bottomLeft: { x: corners.bottom_left[0], y: corners.bottom_left[1] },
-        });
-        setAutoDetected(data.detected);
+        
+        // Create preview URL
+        const previewUrl = URL.createObjectURL(frontImage);
+        const img = new Image();
+        img.onload = () => {
+          setUploadedImage({
+            id: data.image_id,
+            file: frontImage,
+            url: previewUrl,
+            dimensions: { width: img.width, height: img.height },
+            source: "file",
+            side: "front",
+          });
+        };
+        img.src = previewUrl;
+
+        // Handle back image if provided
+        if (backImageFile) {
+          const backFormData = new FormData();
+          backFormData.append("file", backImageFile);
+
+          const backResponse = await fetch("/api/upload", {
+            method: "POST",
+            body: backFormData,
+          });
+
+          if (backResponse.ok) {
+            const backData = await backResponse.json();
+            const backPreviewUrl = URL.createObjectURL(backImageFile);
+            const backImg = new Image();
+            backImg.onload = () => {
+              setBackImage({
+                id: backData.image_id,
+                file: backImageFile,
+                url: backPreviewUrl,
+                dimensions: { width: backImg.width, height: backImg.height },
+                source: "file",
+                side: "back",
+              });
+            };
+            backImg.src = backPreviewUrl;
+          }
+        }
+
+        // Auto-detect corners for front image
+        try {
+          const detectResponse = await fetch(`/api/detect-corners/${data.image_id}`);
+          if (detectResponse.ok) {
+            const detectData = await detectResponse.json();
+            const corners = detectData.corners;
+            setAutoDetectedPoints({
+              topLeft: { x: corners.top_left[0], y: corners.top_left[1] },
+              topRight: { x: corners.top_right[0], y: corners.top_right[1] },
+              bottomRight: { x: corners.bottom_right[0], y: corners.bottom_right[1] },
+              bottomLeft: { x: corners.bottom_left[0], y: corners.bottom_left[1] },
+            });
+            setAutoDetected(detectData.detected);
+          }
+        } catch (error) {
+          console.log("Auto-detection failed, using defaults");
+        }
+
+        setCurrentStep("logo");
       }
     } catch (error) {
-      console.log("Auto-detection failed, using defaults");
+      console.error("Upload failed:", error);
     }
-    
-    setCurrentStep("logo");
   };
 
   const handleLogoUploaded = (logoId: string | null, logoUrl: string | null) => {
@@ -102,8 +156,9 @@ export default function Home() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           image_id: uploadedImage?.id,
-          back_image_id: backImage?.id || null, // Send back image if available
+          back_image_id: backImage?.id || null,
           logo_id: uploadedLogo?.id || null,
+          user_info: userInfo,
           perspective_points: {
             top_left: [points.topLeft.x, points.topLeft.y],
             top_right: [points.topRight.x, points.topRight.y],
@@ -133,139 +188,119 @@ export default function Home() {
     setAutoDetectedPoints(null);
     setAutoDetected(false);
     setJobId(null);
+    setUserInfo(null);
   };
 
   return (
     <div className="min-h-screen">
-      <Header />
+      <AnimatePresence mode="wait">
+        {currentStep === "upload" && (
+          <motion.div
+            key="upload"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+          >
+            <CardUploadPage onComplete={handleUploadComplete} />
+          </motion.div>
+        )}
 
-      {/* Progress Steps */}
-      <div className="max-w-4xl mx-auto px-4 py-8">
-        <div className="flex items-center justify-between mb-12">
-          {steps.map((step, index) => {
-            const Icon = step.icon;
-            const isActive = index === currentStepIndex;
-            const isCompleted = index < currentStepIndex;
-
-            return (
-              <div key={step.id} className="flex items-center flex-1">
-                <motion.div
-                  initial={false}
-                  animate={{
-                    scale: isActive ? 1.1 : 1,
-                    backgroundColor: isCompleted
-                      ? "rgb(59, 130, 246)"
-                      : isActive
-                      ? "rgb(99, 102, 241)"
-                      : "rgb(229, 231, 235)",
-                  }}
-                  className={`
-                    w-12 h-12 rounded-full flex items-center justify-center
-                    ${isCompleted || isActive ? "text-white" : "text-surface-400"}
-                    shadow-lg transition-all
-                  `}
-                >
-                  <Icon className="w-5 h-5" />
-                </motion.div>
-
-                <div className="ml-3 hidden sm:block">
-                  <p
-                    className={`text-sm font-medium ${
-                      isActive ? "text-primary-600" : "text-surface-500"
-                    }`}
-                  >
-                    {step.label}
-                  </p>
-                </div>
-
-                {index < steps.length - 1 && (
-                  <div className="flex-1 mx-4">
-                    <div className="h-1 bg-surface-200 rounded-full overflow-hidden">
-                      <motion.div
-                        initial={{ width: 0 }}
-                        animate={{
-                          width: isCompleted ? "100%" : "0%",
-                        }}
-                        className="h-full bg-primary-500"
-                        transition={{ duration: 0.5 }}
-                      />
-                    </div>
-                  </div>
-                )}
-              </div>
-            );
-          })}
-        </div>
-      </div>
-
-      {/* Main Content */}
-      <div className="max-w-7xl mx-auto px-4 pb-12">
-        <AnimatePresence mode="wait">
-          {currentStep === "upload" && (
-            <motion.div
-              key="upload"
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -20 }}
-              transition={{ duration: 0.3 }}
-            >
-              <SmartUploader onImageUploaded={handleImageUploaded} />
-            </motion.div>
-          )}
-
-          {currentStep === "logo" && (
-            <motion.div
-              key="logo"
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -20 }}
-              transition={{ duration: 0.3 }}
-            >
+        {currentStep === "logo" && uploadedImage && (
+          <motion.div
+            key="logo"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="min-h-screen bg-black py-12 px-4"
+          >
+            <div className="max-w-4xl mx-auto">
               <LogoUploader
                 onLogoUploaded={handleLogoUploaded}
                 onSkip={handleLogoSkip}
                 onBack={() => setCurrentStep("upload")}
               />
-            </motion.div>
-          )}
+            </div>
+          </motion.div>
+        )}
 
-          {currentStep === "crop" && uploadedImage && (
-            <motion.div
-              key="crop"
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -20 }}
-              transition={{ duration: 0.3 }}
-            >
+        {currentStep === "crop" && uploadedImage && (
+          <motion.div
+            key="crop"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="min-h-screen bg-black py-12 px-4"
+          >
+            <div className="max-w-6xl mx-auto">
               <PerspectiveEditor
                 image={uploadedImage}
                 onConfirm={handlePerspectiveConfirmed}
-                onBack={() => setCurrentStep("logo")}
-                initialPoints={autoDetectedPoints}
+                initialPoints={autoDetectedPoints || undefined}
                 autoDetected={autoDetected}
               />
-            </motion.div>
-          )}
+            </div>
+          </motion.div>
+        )}
 
-          {(currentStep === "generate" || currentStep === "complete") && (
-            <motion.div
-              key="generate"
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -20 }}
-              transition={{ duration: 0.3 }}
-            >
+        {currentStep === "generate" && uploadedImage && jobId && (
+          <motion.div
+            key="generate"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="min-h-screen bg-black py-12 px-4"
+          >
+            <div className="max-w-6xl mx-auto">
               <GenerationDashboard
-                jobId={jobId}
                 originalImage={uploadedImage}
+                jobId={jobId}
                 onComplete={handleGenerationComplete}
                 onReset={handleReset}
               />
-            </motion.div>
-          )}
-        </AnimatePresence>
-      </div>
+            </div>
+          </motion.div>
+        )}
+
+        {currentStep === "complete" && (
+          <motion.div
+            key="complete"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="min-h-screen bg-black flex items-center justify-center py-12 px-4"
+          >
+            <div className="text-center">
+              <div className="w-24 h-24 bg-gradient-to-br from-green-400 to-emerald-500 rounded-full flex items-center justify-center mx-auto mb-6">
+                <svg
+                  className="w-12 h-12 text-white"
+                  fill="none"
+                  viewBox="0 0 24 24"
+                  stroke="currentColor"
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={2}
+                    d="M5 13l4 4L19 7"
+                  />
+                </svg>
+              </div>
+              <h1 className="text-4xl font-bold text-white mb-4">
+                Carte générée avec succès!
+              </h1>
+              <p className="text-gray-400 mb-8">
+                Votre carte d'affaires digitale est prête.
+              </p>
+              <button
+                onClick={handleReset}
+                className="bg-gradient-to-r from-cyan-500 to-purple-600 text-white px-8 py-3 rounded-xl font-semibold hover:shadow-[0_0_30px_rgba(34,211,238,0.5)] transition-all"
+              >
+                Créer une nouvelle carte
+              </button>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }
-
