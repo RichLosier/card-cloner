@@ -17,6 +17,7 @@ interface UploadedImage {
   url: string;
   dimensions: { width: number; height: number };
   source?: "camera" | "file" | "mobile";
+  side?: "front" | "back";
 }
 
 interface UploadedLogo {
@@ -34,6 +35,7 @@ interface PerspectivePoints {
 export default function Home() {
   const [currentStep, setCurrentStep] = useState<Step>("upload");
   const [uploadedImage, setUploadedImage] = useState<UploadedImage | null>(null);
+  const [backImage, setBackImage] = useState<UploadedImage | null>(null); // For verso
   const [uploadedLogo, setUploadedLogo] = useState<UploadedLogo | null>(null);
   const [perspectivePoints, setPerspectivePoints] = useState<PerspectivePoints | null>(null);
   const [autoDetectedPoints, setAutoDetectedPoints] = useState<PerspectivePoints | null>(null);
@@ -50,12 +52,17 @@ export default function Home() {
 
   const currentStepIndex = steps.findIndex((s) => s.id === currentStep);
 
-  const handleImageUploaded = async (image: UploadedImage) => {
-    setUploadedImage(image);
+  const handleImageUploaded = async (frontImage: UploadedImage, backImageData?: UploadedImage) => {
+    setUploadedImage(frontImage);
     
-    // Auto-detect corners
+    // Store back image if provided
+    if (backImageData) {
+      setBackImage(backImageData);
+    }
+    
+    // Auto-detect corners for front image
     try {
-      const response = await fetch(`/api/detect-corners/${image.id}`);
+      const response = await fetch(`/api/detect-corners/${frontImage.id}`);
       if (response.ok) {
         const data = await response.json();
         const corners = data.corners;
@@ -95,6 +102,7 @@ export default function Home() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           image_id: uploadedImage?.id,
+          back_image_id: backImage?.id || null, // Send back image if available
           logo_id: uploadedLogo?.id || null,
           perspective_points: {
             top_left: [points.topLeft.x, points.topLeft.y],
@@ -119,6 +127,7 @@ export default function Home() {
   const handleReset = () => {
     setCurrentStep("upload");
     setUploadedImage(null);
+    setBackImage(null);
     setUploadedLogo(null);
     setPerspectivePoints(null);
     setAutoDetectedPoints(null);

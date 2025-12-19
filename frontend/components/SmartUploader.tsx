@@ -16,7 +16,7 @@ interface UploadedImage {
 }
 
 interface SmartUploaderProps {
-  onImageUploaded: (image: UploadedImage) => void;
+  onImageUploaded: (frontImage: UploadedImage, backImage?: UploadedImage) => void;
 }
 
 // Compress image client-side for faster upload
@@ -70,8 +70,11 @@ export default function SmartUploader({ onImageUploaded }: SmartUploaderProps) {
   const [uploadProgress, setUploadProgress] = useState<string | null>(null);
   const [uploadPercent, setUploadPercent] = useState(0);
   const [error, setError] = useState<string | null>(null);
-  const [selectedSide, setSelectedSide] = useState<"front" | "back">("front");
-  const [captureForSide, setCaptureForSide] = useState<"front" | "back">("front");
+  
+  // Two-step flow: front first, then back (optional)
+  const [currentStep, setCurrentStep] = useState<"front" | "back">("front");
+  const [frontImage, setFrontImage] = useState<UploadedImage | null>(null);
+  const [backImage, setBackImage] = useState<UploadedImage | null>(null);
 
   // Detect if user is on mobile
   useEffect(() => {
@@ -191,13 +194,13 @@ export default function SmartUploader({ onImageUploaded }: SmartUploaderProps) {
       const img = new Image();
       img.onload = () => {
         setUploadPercent(100);
-        onImageUploaded({
+        handleImageComplete({
           id: data.image_id,
           file,
           url: imageData,
           dimensions: { width: img.width, height: img.height },
           source: "camera",
-          side: captureForSide
+          side: currentStep
         });
       };
       img.src = imageData;
@@ -283,25 +286,25 @@ export default function SmartUploader({ onImageUploaded }: SmartUploaderProps) {
       setUploadProgress("Finalisation...");
 
       if (isPDF) {
-        onImageUploaded({
+        handleImageComplete({
           id: data.image_id,
           url: `/api/image/${data.image_id}`,
           dimensions: data.dimensions,
           source: "file",
-          side: selectedSide
+          side: currentStep
         });
       } else {
         const previewUrl = URL.createObjectURL(uploadFile);
         const img = new Image();
         img.onload = () => {
           setUploadPercent(100);
-          onImageUploaded({
+          handleImageComplete({
             id: data.image_id,
             file: file,
             url: previewUrl,
             dimensions: { width: img.width, height: img.height },
             source: "file",
-            side: selectedSide
+            side: currentStep
           });
         };
         img.src = previewUrl;
@@ -321,6 +324,33 @@ export default function SmartUploader({ onImageUploaded }: SmartUploaderProps) {
     setShowQRModal(false);
     setQrCodeUrl(null);
     setSessionId(null);
+  };
+
+  // Handle uploaded image and manage step flow
+  const handleImageComplete = (image: UploadedImage) => {
+    if (currentStep === "front") {
+      setFrontImage({ ...image, side: "front" });
+      setCurrentStep("back"); // Move to back step
+    } else {
+      setBackImage({ ...image, side: "back" });
+      // Both done, call parent with both images
+      if (frontImage) {
+        onImageUploaded(frontImage, { ...image, side: "back" });
+      }
+    }
+  };
+
+  // Skip the back side and continue with just the front
+  const handleSkipBack = () => {
+    if (frontImage) {
+      onImageUploaded(frontImage, undefined);
+    }
+  };
+
+  // Go back to front step
+  const handleBackToFront = () => {
+    setCurrentStep("front");
+    setFrontImage(null);
   };
 
   return (
@@ -385,35 +415,92 @@ export default function SmartUploader({ onImageUploaded }: SmartUploaderProps) {
 
       {/* Main upload interface */}
       <div className="max-w-4xl mx-auto">
-        {/* Side selection (Front/Back) */}
+        {/* Step indicator */}
         <div className="mb-8">
-          <label className="block text-sm font-medium text-surface-700 mb-3">
-            Quel côté de la carte ?
-          </label>
-          <div className="flex gap-3">
-            <button
-              onClick={() => { setSelectedSide("front"); setCaptureForSide("front"); }}
-              className={`flex-1 py-3 px-4 rounded-xl border-2 transition-all flex items-center justify-center gap-2 ${
-                selectedSide === "front"
-                  ? "border-primary-500 bg-primary-50 text-primary-700"
-                  : "border-surface-200 bg-white text-surface-600 hover:border-surface-300"
-              }`}
-            >
-              <span className="text-xl">🎴</span>
-              <span className="font-medium">Recto (avant)</span>
-            </button>
-            <button
-              onClick={() => { setSelectedSide("back"); setCaptureForSide("back"); }}
-              className={`flex-1 py-3 px-4 rounded-xl border-2 transition-all flex items-center justify-center gap-2 ${
-                selectedSide === "back"
-                  ? "border-primary-500 bg-primary-50 text-primary-700"
-                  : "border-surface-200 bg-white text-surface-600 hover:border-surface-300"
-              }`}
-            >
-              <RotateCw className="w-5 h-5" />
-              <span className="font-medium">Verso (arrière)</span>
-            </button>
+          <div className="flex items-center justify-center gap-4 mb-6">
+            {/* Step 1: Front */}
+            <div className="flex items-center gap-2">
+              <div className={`w-10 h-10 rounded-full flex items-center justify-center font-bold transition-all ${
+                currentStep === "front" 
+                  ? "bg-primary-600 text-white scale-110 shadow-lg" 
+                  : frontImage 
+                    ? "bg-green-500 text-white" 
+                    : "bg-surface-200 text-surface-500"
+              }`}>
+                {frontImage ? <Check className="w-5 h-5" /> : "1"}
+              </div>
+              <span className={`font-medium ${currentStep === "front" ? "text-primary-700" : "text-surface-600"}`}>
+                Recto
+              </span>
+            </div>
+
+            {/* Connector */}
+            <div className={`w-16 h-1 rounded-full transition-all ${
+              frontImage ? "bg-green-400" : "bg-surface-200"
+            }`} />
+
+            {/* Step 2: Back */}
+            <div className="flex items-center gap-2">
+              <div className={`w-10 h-10 rounded-full flex items-center justify-center font-bold transition-all ${
+                currentStep === "back" 
+                  ? "bg-primary-600 text-white scale-110 shadow-lg" 
+                  : backImage 
+                    ? "bg-green-500 text-white" 
+                    : "bg-surface-200 text-surface-500"
+              }`}>
+                {backImage ? <Check className="w-5 h-5" /> : "2"}
+              </div>
+              <span className={`font-medium ${currentStep === "back" ? "text-primary-700" : "text-surface-600"}`}>
+                Verso <span className="text-xs text-surface-400">(optionnel)</span>
+              </span>
+            </div>
           </div>
+
+          {/* Current step title */}
+          <motion.div
+            key={currentStep}
+            initial={{ opacity: 0, y: -10 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="text-center mb-6"
+          >
+            <h2 className="text-2xl font-bold text-surface-800">
+              {currentStep === "front" 
+                ? "📸 Téléversez le RECTO de votre carte" 
+                : "🔄 Téléversez le VERSO de votre carte"}
+            </h2>
+            <p className="text-surface-500 mt-2">
+              {currentStep === "front" 
+                ? "C'est le côté principal avec votre nom et logo"
+                : "C'est le côté arrière de la carte (optionnel)"}
+            </p>
+          </motion.div>
+
+          {/* Front preview when on back step */}
+          {currentStep === "back" && frontImage && (
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              className="mb-6 p-4 bg-green-50 border border-green-200 rounded-xl"
+            >
+              <div className="flex items-center gap-4">
+                <img 
+                  src={frontImage.url} 
+                  alt="Recto" 
+                  className="w-24 h-14 object-cover rounded-lg border-2 border-green-300"
+                />
+                <div className="flex-1">
+                  <p className="font-medium text-green-800">✓ Recto téléversé</p>
+                  <p className="text-sm text-green-600">Image prête pour le traitement</p>
+                </div>
+                <button
+                  onClick={handleBackToFront}
+                  className="text-surface-500 hover:text-surface-700 text-sm underline"
+                >
+                  Modifier
+                </button>
+              </div>
+            </motion.div>
+          )}
         </div>
 
         {/* Loading state with progress bar */}
@@ -553,6 +640,30 @@ export default function SmartUploader({ onImageUploaded }: SmartUploaderProps) {
           </motion.div>
         </div>
 
+        {/* Skip button for verso step */}
+        <AnimatePresence>
+          {currentStep === "back" && (
+            <motion.div
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -10 }}
+              className="mt-8 text-center"
+            >
+              <button
+                onClick={handleSkipBack}
+                disabled={isUploading}
+                className="inline-flex items-center gap-2 px-8 py-4 bg-surface-100 hover:bg-surface-200 text-surface-700 font-medium rounded-2xl transition-all disabled:opacity-50"
+              >
+                <span className="text-lg">⏭️</span>
+                <span>Passer cette étape (pas de verso)</span>
+              </button>
+              <p className="mt-3 text-sm text-surface-400">
+                Vous pourrez toujours ajouter le verso plus tard
+              </p>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
         {/* Tips */}
         <motion.div
           initial={{ opacity: 0 }}
@@ -564,7 +675,7 @@ export default function SmartUploader({ onImageUploaded }: SmartUploaderProps) {
             { emoji: "💡", title: "Bonne lumière", desc: "Évitez les ombres et reflets" },
             { emoji: "📐", title: "Carte à plat", desc: "Posez-la sur une surface plane" },
             { emoji: "🎯", title: "4 coins visibles", desc: "Incluez toute la carte" },
-          ].map((tip, i) => (
+          ].map((tip) => (
             <div
               key={tip.title}
               className="p-4 bg-surface-50 rounded-xl border border-surface-100"
