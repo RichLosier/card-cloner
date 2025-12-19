@@ -1,0 +1,24 @@
+# fly.toml app configuration file for card-cloner-api
+
+app = 'card-cloner-api'
+primary_region = 'yul'
+
+[build]
+  dockerfile = "Dockerfile"
+
+[http_service]
+  internal_port = 8000
+  force_https = true
+  auto_stop_machines = 'stop'
+  auto_start_machines = true
+  min_machines_running = 0
+  processes = ['app']
+
+[[vm]]
+  memory = '1gb'
+  cpu_kind = 'shared'
+  cpus = 1
+
+[env]
+  PORT = "8000"
+
