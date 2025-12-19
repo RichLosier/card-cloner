@@ -235,6 +235,7 @@ export default function Home() {
               <PerspectiveEditor
                 image={uploadedImage}
                 onConfirm={handlePerspectiveConfirmed}
+                onBack={() => setCurrentStep("logo")}
                 initialPoints={autoDetectedPoints || undefined}
                 autoDetected={autoDetected}
               />
