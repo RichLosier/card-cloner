@@ -24,13 +24,9 @@ WORKDIR /app
 # Copy requirements first for caching
 COPY requirements.txt .
 
-# Install Python dependencies
+# Install Python dependencies (skip playwright for now - not needed for v1)
 RUN pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir -r requirements.txt
-
-# Install Playwright browsers
-RUN playwright install chromium && \
-    playwright install-deps chromium
+    pip install --no-cache-dir -r requirements.txt --ignore-installed
 
 # Copy application code
 COPY . .

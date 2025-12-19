@@ -21,11 +21,11 @@ langchain>=0.1.6
 langchain-openai>=0.0.5
 langchain-anthropic>=0.1.1
 
-# Browser Automation for Screenshots
-playwright==1.41.2
+# Browser Automation for Screenshots (disabled for v1)
+# playwright==1.41.2
 
-# Image Comparison
-pixelmatch==0.3.0
+# Image Comparison (disabled for v1)
+# pixelmatch==0.3.0
 
 # Database - Version compatible avec httpx
 supabase>=2.4.0
