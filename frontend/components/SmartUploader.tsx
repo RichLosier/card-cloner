@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Camera, Upload, FileText, Smartphone, QrCode, Loader2, Check, X } from "lucide-react";
+import { Camera, Upload, FileText, Smartphone, QrCode, Loader2, Check, X, RotateCw } from "lucide-react";
 import CameraCapture from "./CameraCapture";
 import QRCode from "qrcode";
 
@@ -12,10 +12,52 @@ interface UploadedImage {
   url: string;
   dimensions: { width: number; height: number };
   source: "camera" | "file" | "mobile";
+  side?: "front" | "back";
 }
 
 interface SmartUploaderProps {
   onImageUploaded: (image: UploadedImage) => void;
+}
+
+// Compress image client-side for faster upload
+async function compressImage(file: File, maxWidth = 1920, quality = 0.85): Promise<Blob> {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => {
+      const canvas = document.createElement("canvas");
+      let { width, height } = img;
+      
+      // Scale down if too large
+      if (width > maxWidth) {
+        height = (height * maxWidth) / width;
+        width = maxWidth;
+      }
+      
+      canvas.width = width;
+      canvas.height = height;
+      
+      const ctx = canvas.getContext("2d");
+      if (!ctx) {
+        reject(new Error("Canvas context not available"));
+        return;
+      }
+      
+      ctx.drawImage(img, 0, 0, width, height);
+      canvas.toBlob(
+        (blob) => {
+          if (blob) {
+            resolve(blob);
+          } else {
+            reject(new Error("Compression failed"));
+          }
+        },
+        "image/jpeg",
+        quality
+      );
+    };
+    img.onerror = reject;
+    img.src = URL.createObjectURL(file);
+  });
 }
 
 export default function SmartUploader({ onImageUploaded }: SmartUploaderProps) {
@@ -26,7 +68,10 @@ export default function SmartUploader({ onImageUploaded }: SmartUploaderProps) {
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [isUploading, setIsUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState<string | null>(null);
+  const [uploadPercent, setUploadPercent] = useState(0);
   const [error, setError] = useState<string | null>(null);
+  const [selectedSide, setSelectedSide] = useState<"front" | "back">("front");
+  const [captureForSide, setCaptureForSide] = useState<"front" | "back">("front");
 
   // Detect if user is on mobile
   useEffect(() => {
@@ -105,11 +150,12 @@ export default function SmartUploader({ onImageUploaded }: SmartUploaderProps) {
     poll();
   };
 
-  // Handle camera capture
+  // Handle camera capture with compression
   const handleCameraCapture = async (imageData: string) => {
     setShowCamera(false);
     setIsUploading(true);
-    setUploadProgress("Traitement de l'image...");
+    setUploadPercent(0);
+    setUploadProgress("Optimisation de l'image...");
 
     try {
       // Convert base64 to blob
@@ -117,11 +163,19 @@ export default function SmartUploader({ onImageUploaded }: SmartUploaderProps) {
       const blob = await response.blob();
       const file = new File([blob], "capture.jpg", { type: "image/jpeg" });
 
+      setUploadPercent(10);
+      
+      // Compress the image
+      const compressed = await compressImage(file, 1920, 0.85);
+      setUploadPercent(30);
+
       // Upload to backend
       const formData = new FormData();
-      formData.append("file", file);
+      formData.append("file", compressed, "capture.jpg");
 
       setUploadProgress("Upload en cours...");
+      setUploadPercent(40);
+      
       const uploadResponse = await fetch("/api/upload", {
         method: "POST",
         body: formData,
@@ -130,79 +184,135 @@ export default function SmartUploader({ onImageUploaded }: SmartUploaderProps) {
       if (!uploadResponse.ok) throw new Error("Upload failed");
 
       const data = await uploadResponse.json();
+      setUploadPercent(90);
+      setUploadProgress("Finalisation...");
 
       // Get image dimensions
       const img = new Image();
       img.onload = () => {
+        setUploadPercent(100);
         onImageUploaded({
           id: data.image_id,
           file,
           url: imageData,
           dimensions: { width: img.width, height: img.height },
-          source: "camera"
+          source: "camera",
+          side: captureForSide
         });
       };
       img.src = imageData;
     } catch (err) {
+      console.error("Camera upload error:", err);
       setError("Erreur lors de l'upload. Veuillez réessayer.");
     } finally {
       setIsUploading(false);
       setUploadProgress(null);
+      setUploadPercent(0);
     }
   };
 
-  // Handle file upload
+  // Handle file upload with compression
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
     setError(null);
     setIsUploading(true);
+    setUploadPercent(0);
 
     const isPDF = file.type === "application/pdf";
-    setUploadProgress(isPDF ? "Extraction du PDF..." : "Upload en cours...");
-
+    
     try {
+      let uploadFile: File | Blob = file;
+      
+      // Compress images client-side for faster upload
+      if (!isPDF && file.type.startsWith("image/")) {
+        setUploadProgress("Optimisation de l'image...");
+        setUploadPercent(10);
+        
+        const originalSize = file.size / 1024 / 1024; // MB
+        console.log(`Original size: ${originalSize.toFixed(2)} MB`);
+        
+        const compressed = await compressImage(file, 1920, 0.85);
+        const compressedSize = compressed.size / 1024 / 1024;
+        console.log(`Compressed size: ${compressedSize.toFixed(2)} MB`);
+        
+        uploadFile = compressed;
+        setUploadPercent(30);
+      }
+      
+      setUploadProgress(isPDF ? "Extraction du PDF..." : "Upload en cours...");
+      setUploadPercent(40);
+
       const formData = new FormData();
-      formData.append("file", file);
+      formData.append("file", uploadFile, isPDF ? file.name : "image.jpg");
 
-      const response = await fetch(isPDF ? "/api/upload-pdf" : "/api/upload", {
-        method: "POST",
-        body: formData,
+      // Use XMLHttpRequest for progress tracking
+      const xhr = new XMLHttpRequest();
+      
+      const uploadPromise = new Promise<any>((resolve, reject) => {
+        xhr.upload.addEventListener("progress", (e) => {
+          if (e.lengthComputable) {
+            const percent = Math.round(40 + (e.loaded / e.total) * 50);
+            setUploadPercent(percent);
+          }
+        });
+        
+        xhr.addEventListener("load", () => {
+          if (xhr.status >= 200 && xhr.status < 300) {
+            try {
+              resolve(JSON.parse(xhr.responseText));
+            } catch {
+              reject(new Error("Invalid response"));
+            }
+          } else {
+            reject(new Error(`Upload failed: ${xhr.status}`));
+          }
+        });
+        
+        xhr.addEventListener("error", () => reject(new Error("Network error")));
+        xhr.addEventListener("timeout", () => reject(new Error("Timeout")));
+        
+        xhr.timeout = 60000; // 60 second timeout
+        xhr.open("POST", isPDF ? "/api/upload-pdf" : "/api/upload");
+        xhr.send(formData);
       });
-
-      if (!response.ok) throw new Error("Upload failed");
-
-      const data = await response.json();
+      
+      const data = await uploadPromise;
+      setUploadPercent(95);
+      setUploadProgress("Finalisation...");
 
       if (isPDF) {
-        // For PDF, we get a rendered image back
         onImageUploaded({
           id: data.image_id,
           url: `/api/image/${data.image_id}`,
           dimensions: data.dimensions,
-          source: "file"
+          source: "file",
+          side: selectedSide
         });
       } else {
-        // For images, create preview
-        const previewUrl = URL.createObjectURL(file);
+        const previewUrl = URL.createObjectURL(uploadFile);
         const img = new Image();
         img.onload = () => {
+          setUploadPercent(100);
           onImageUploaded({
             id: data.image_id,
-            file,
+            file: file,
             url: previewUrl,
             dimensions: { width: img.width, height: img.height },
-            source: "file"
+            source: "file",
+            side: selectedSide
           });
         };
         img.src = previewUrl;
       }
     } catch (err) {
+      console.error("Upload error:", err);
       setError("Erreur lors de l'upload. Veuillez réessayer.");
     } finally {
       setIsUploading(false);
       setUploadProgress(null);
+      setUploadPercent(0);
     }
   };
 
@@ -275,19 +385,59 @@ export default function SmartUploader({ onImageUploaded }: SmartUploaderProps) {
 
       {/* Main upload interface */}
       <div className="max-w-4xl mx-auto">
-        {/* Loading state */}
+        {/* Side selection (Front/Back) */}
+        <div className="mb-8">
+          <label className="block text-sm font-medium text-surface-700 mb-3">
+            Quel côté de la carte ?
+          </label>
+          <div className="flex gap-3">
+            <button
+              onClick={() => { setSelectedSide("front"); setCaptureForSide("front"); }}
+              className={`flex-1 py-3 px-4 rounded-xl border-2 transition-all flex items-center justify-center gap-2 ${
+                selectedSide === "front"
+                  ? "border-primary-500 bg-primary-50 text-primary-700"
+                  : "border-surface-200 bg-white text-surface-600 hover:border-surface-300"
+              }`}
+            >
+              <span className="text-xl">🎴</span>
+              <span className="font-medium">Recto (avant)</span>
+            </button>
+            <button
+              onClick={() => { setSelectedSide("back"); setCaptureForSide("back"); }}
+              className={`flex-1 py-3 px-4 rounded-xl border-2 transition-all flex items-center justify-center gap-2 ${
+                selectedSide === "back"
+                  ? "border-primary-500 bg-primary-50 text-primary-700"
+                  : "border-surface-200 bg-white text-surface-600 hover:border-surface-300"
+              }`}
+            >
+              <RotateCw className="w-5 h-5" />
+              <span className="font-medium">Verso (arrière)</span>
+            </button>
+          </div>
+        </div>
+
+        {/* Loading state with progress bar */}
         {isUploading && (
           <motion.div
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             className="mb-8 p-6 bg-primary-50 border border-primary-200 rounded-2xl"
           >
-            <div className="flex items-center gap-4">
+            <div className="flex items-center gap-4 mb-4">
               <Loader2 className="w-8 h-8 text-primary-600 animate-spin" />
-              <div>
+              <div className="flex-1">
                 <p className="font-medium text-primary-900">{uploadProgress}</p>
-                <p className="text-sm text-primary-600">Veuillez patienter...</p>
+                <p className="text-sm text-primary-600">{uploadPercent}% - Veuillez patienter...</p>
               </div>
+            </div>
+            {/* Progress bar */}
+            <div className="w-full bg-primary-200 rounded-full h-2 overflow-hidden">
+              <motion.div
+                className="h-full bg-primary-600 rounded-full"
+                initial={{ width: 0 }}
+                animate={{ width: `${uploadPercent}%` }}
+                transition={{ duration: 0.3 }}
+              />
             </div>
           </motion.div>
         )}
