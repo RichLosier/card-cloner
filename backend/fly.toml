@@ -1,7 +1,7 @@
 # fly.toml app configuration file for card-cloner-api
 
 app = 'card-cloner-api'
-primary_region = 'yul'
+primary_region = 'yyz'
 
 [build]
   dockerfile = "Dockerfile"
